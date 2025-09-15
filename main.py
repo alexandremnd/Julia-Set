@@ -100,6 +100,8 @@ def compute_smooth_iter(z, dz_dc, count, has_escaped, escape_radius=10**5):
 
 def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
     escape_radius = 10**5
+    stripe_density = 2
+    stripe_memory = 0.9
 
     xs = jnp.linspace(xlim[0], xlim[1], width * D, dtype=jnp.float32)
     ys = jnp.linspace(ylim[0], ylim[1], height * D, dtype=jnp.float32)
@@ -120,38 +122,39 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
 
     for i in range(max_iter):
         z, dz_dc, count, has_escaped = mandelbrot_step_jit(z, dz_dc, c, count, escape_radius, has_escaped)
-        stripe_a = stripe_average_jit(z, stripe_a, has_escaped, stripe_density=2, stripe_memory=0.9)
+        stripe_a = stripe_average_jit(z, stripe_a, has_escaped, stripe_density, stripe_memory)
 
     light_source = create_light_source(45, 45)
     normal = z / dz_dc
-    brightness = compute_lighting(normal, light_source, has_escaped)
+    brightness = compute_lighting_jit(normal, light_source, has_escaped)
 
     smooth_iter, milnor_distance = compute_smooth_iter_jit(z, dz_dc, count, has_escaped, escape_radius)
 
-    # stripe = final_stripe_average(z, stripe_a, count, has_escaped, smooth_iter, 0.9)
-    # stripe = stripe_a
-    # color = apply_color(smooth_iter)
-    # color = jnp.where(has_escaped[..., None], color, jnp.zeros_like(color))
+    stripe_t = (1 + jnp.sin(stripe_density * jnp.angle(z))) / 2
+    stripe_a = (stripe_a * (1 + smooth_iter * (stripe_memory - 1)) +
+                            stripe_t * smooth_iter * (1 - stripe_memory))
+    stripe_a = stripe_a / (1 - stripe_memory**count *
+                                       (1 + smooth_iter * (stripe_memory - 1)))
 
-    return brightness
+    color = apply_color(smooth_iter, stripe_a, milnor_distance, brightness)
 
-def apply_color(smooth_iter, milnor_distance, brightness, rgb_theta=(.0, .15, .25)):
-    print(smooth_iter, jnp.max(smooth_iter), jnp.min(smooth_iter))
+    return brightness, smooth_iter, milnor_distance, color
+
+def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0, .15, .25)):
     smooth_iter = jnp.sqrt(smooth_iter) / jnp.sqrt(jnp.max(smooth_iter))
     milnor_distance = -jnp.log(milnor_distance) / 12
     milnor_distance = 1/(1 + jnp.exp(-10 * (milnor_distance - 0.5)))
 
-    brightness = overlay(brightness, 0) * (1 - milnor_distance) + milnor_distance * brightness
-    print(brightness, jnp.max(brightness), jnp.min(brightness))
+    brightness = overlay(brightness, stripe) * (1 - milnor_distance) + milnor_distance * brightness
 
     color = (1 + jnp.sin(2 * jnp.pi * (smooth_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
     color = overlay(color, brightness[..., None])
     color = jnp.clip(color, 0, 1)
 
-    return color
+    return stripe
 
 def main():
-    color = mandelbrot(1080, 720, 1000, (-2.6, 2.6), (-1.5, 1.5))
+    brightness, smooth_iter, milnor_distance, color = mandelbrot(1080, 720, 1000, (-2.6, 2.6), (-1.5, 1.5))
     # print(color)
     plt.imshow(color)
     plt.show()
