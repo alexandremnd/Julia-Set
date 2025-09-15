@@ -90,7 +90,7 @@ def create_light_source(azimuth: float = 45, elevation: float = 45) -> Array:
 def compute_smooth_iter(z, dz_dc, count, has_escaped, escape_radius=10**5):
     abs_z = jnp.abs(z)
     log_ratio = jnp.log(abs_z) / jnp.log(escape_radius)
-    smooth_iter = count + 1 - jnp.log(log_ratio) / jnp.log(2)
+    smooth_iter = 1 - jnp.log(log_ratio) / jnp.log(2)
     smooth_iter = jnp.where(has_escaped, smooth_iter, 0.0)
 
     milnor_distance = abs_z * jnp.log(abs_z) / jnp.abs(dz_dc) / 2
@@ -138,7 +138,7 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
 
     color = apply_color(smooth_iter, stripe_a, milnor_distance, brightness)
 
-    return brightness, smooth_iter, milnor_distance, color
+    return brightness, count + smooth_iter, milnor_distance, color
 
 def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0, .15, .25)):
     smooth_iter = jnp.sqrt(smooth_iter) / jnp.sqrt(jnp.max(smooth_iter))
@@ -151,7 +151,7 @@ def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0,
     color = overlay(color, brightness[..., None])
     color = jnp.clip(color, 0, 1)
 
-    return stripe
+    return brightness
 
 def main():
     brightness, smooth_iter, milnor_distance, color = mandelbrot(1080, 720, 1000, (-2.6, 2.6), (-1.5, 1.5))
