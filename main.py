@@ -1,8 +1,8 @@
 import jax.numpy as jnp
 import jax
-from jax import lax
 from jax import Array
 import numpy as np
+from PIL import Image
 import matplotlib.pyplot as plt
 
 def overlay(base, overlay):
@@ -87,7 +87,7 @@ def create_light_source(azimuth: float = 45, elevation: float = 45) -> Array:
 
     return jnp.array([x, y, z])
 
-def compute_smooth_iter(z, dz_dc, count, has_escaped, escape_radius=10**5):
+def compute_smooth_iter(z, dz_dc, has_escaped, escape_radius=2.0):
     abs_z = jnp.abs(z)
     log_ratio = jnp.log(abs_z) / jnp.log(escape_radius)
     smooth_iter = 1 - jnp.log(log_ratio) / jnp.log(2)
@@ -99,7 +99,7 @@ def compute_smooth_iter(z, dz_dc, count, has_escaped, escape_radius=10**5):
     return smooth_iter, milnor_distance
 
 def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
-    escape_radius = 10**5
+    escape_radius = 10**3
     stripe_density = 2
     stripe_memory = 0.9
 
@@ -113,7 +113,7 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
     has_escaped = jnp.zeros(c.shape, dtype=bool)
     stripe_a = jnp.zeros(c.shape, dtype=jnp.float32)
 
-    count = jnp.zeros(c.shape, dtype=jnp.float32)
+    count = jnp.zeros(c.shape, dtype=jnp.int32)
 
     mandelbrot_step_jit = jax.jit(mandelbrot_step)
     stripe_average_jit = jax.jit(stripe_average)
@@ -128,7 +128,7 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
     normal = z / dz_dc
     brightness = compute_lighting_jit(normal, light_source, has_escaped)
 
-    smooth_iter, milnor_distance = compute_smooth_iter_jit(z, dz_dc, count, has_escaped, escape_radius)
+    smooth_iter, milnor_distance = compute_smooth_iter_jit(z, dz_dc, has_escaped, escape_radius)
 
     stripe_t = (1 + jnp.sin(stripe_density * jnp.angle(z))) / 2
     stripe_a = (stripe_a * (1 + smooth_iter * (stripe_memory - 1)) +
@@ -136,12 +136,12 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
     stripe_a = stripe_a / (1 - stripe_memory**count *
                                        (1 + smooth_iter * (stripe_memory - 1)))
 
-    color = apply_color(smooth_iter, stripe_a, milnor_distance, brightness)
+    color = apply_color(count + smooth_iter, stripe_a, milnor_distance, brightness)
 
     return brightness, count + smooth_iter, milnor_distance, color
 
-def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0, .15, .25)):
-    smooth_iter = jnp.sqrt(smooth_iter) / jnp.sqrt(jnp.max(smooth_iter))
+def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.11, .02, .92), ncycle=32):
+    smooth_iter = jnp.sqrt(smooth_iter) % ncycle / ncycle
     milnor_distance = -jnp.log(milnor_distance) / 12
     milnor_distance = 1/(1 + jnp.exp(-10 * (milnor_distance - 0.5)))
 
@@ -149,13 +149,16 @@ def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0,
 
     color = (1 + jnp.sin(2 * jnp.pi * (smooth_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
     color = overlay(color, brightness[..., None])
-    color = jnp.clip(color, 0, 1)
 
-    return brightness
+    return color
 
 def main():
-    brightness, smooth_iter, milnor_distance, color = mandelbrot(1080, 720, 1000, (-2.6, 2.6), (-1.5, 1.5))
+    # jax.config.update("jax_enable_x64", True)
+    x_lim = (-0.5503295086752807, -0.5503293049351449)
+    y_lim = (-0.6259346555912755, -0.625934541001796)
+    brightness, smooth_iter, milnor_distance, color = mandelbrot(1920, 1080, 5000, x_lim, y_lim)
     # print(color)
+
     plt.imshow(color)
     plt.show()
 
