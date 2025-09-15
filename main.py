@@ -27,7 +27,7 @@ def compute_lighting(
     light_vector: Array,
     has_escaped: Array,
     opacity: float = .75,
-    k_specular: int = 30,
+    k_specular: int = 20,
     k_shininess: float = .5,
     k_diffuse: float = .5,
     k_ambient: float = .2,
@@ -54,16 +54,18 @@ def compute_lighting(
     normal_vector *= has_escaped[..., None] # Mask pixels inside the mandelbrot set
 
     diffuse_light = jnp.dot(normal_vector, light_vector)
+    brightness = diffuse_light
 
     reflection_vector = 2 * jnp.dot(normal_vector, light_vector)[..., None] * normal_vector - light_vector[None, None, :]
     viewer_vector = jnp.array([0.0, 0.0, 1.0])
-    specular_light = jnp.dot(reflection_vector, viewer_vector)**k_specular
+    specular_light = jnp.dot(reflection_vector, viewer_vector)
+    # brightness = specular_light
 
-    brightness = (
-        k_ambient
-        + k_diffuse * diffuse_light
-        + k_shininess * specular_light
-    ) * opacity + (1 - opacity) / 2
+    # brightness = (
+    #     k_ambient
+    #     + k_diffuse * diffuse_light
+    #     + k_shininess * specular_light
+    # ) * opacity + (1 - opacity) / 2
 
     return brightness
 
@@ -99,19 +101,19 @@ def compute_smooth_iter(z, dz_dc, has_escaped, escape_radius=2.0):
     return smooth_iter, milnor_distance
 
 def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
-    escape_radius = 10**3
-    stripe_density = 2
+    escape_radius = 10**5
+    stripe_density = 5
     stripe_memory = 0.9
 
-    xs = jnp.linspace(xlim[0], xlim[1], width * D, dtype=jnp.float32)
-    ys = jnp.linspace(ylim[0], ylim[1], height * D, dtype=jnp.float32)
+    xs = jnp.linspace(xlim[0], xlim[1], width * D, dtype=jnp.float64)
+    ys = jnp.linspace(ylim[0], ylim[1], height * D, dtype=jnp.float64)
     X, Y = jnp.meshgrid(xs, ys)
 
     c = X + 1j * Y
-    z = jnp.zeros_like(c, dtype=jnp.complex64)
-    dz_dc = jnp.ones_like(c, dtype=jnp.complex64)
+    z = jnp.zeros_like(c, dtype=jnp.complex128)
+    dz_dc = jnp.ones_like(c, dtype=jnp.complex128)
     has_escaped = jnp.zeros(c.shape, dtype=bool)
-    stripe_a = jnp.zeros(c.shape, dtype=jnp.float32)
+    stripe_a = jnp.zeros(c.shape, dtype=jnp.float64)
 
     count = jnp.zeros(c.shape, dtype=jnp.int32)
 
@@ -145,18 +147,21 @@ def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.11
     milnor_distance = -jnp.log(milnor_distance) / 12
     milnor_distance = 1/(1 + jnp.exp(-10 * (milnor_distance - 0.5)))
 
-    brightness = overlay(brightness, stripe) * (1 - milnor_distance) + milnor_distance * brightness
+    # brightness = overlay(brightness, stripe) * (1 - milnor_distance) + milnor_distance * brightness
 
     color = (1 + jnp.sin(2 * jnp.pi * (smooth_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
     color = overlay(color, brightness[..., None])
 
-    return color
+    return brightness
 
 def main():
-    # jax.config.update("jax_enable_x64", True)
-    x_lim = (-0.5503295086752807, -0.5503293049351449)
-    y_lim = (-0.6259346555912755, -0.625934541001796)
-    brightness, smooth_iter, milnor_distance, color = mandelbrot(1920, 1080, 5000, x_lim, y_lim)
+    jax.config.update("jax_enable_x64", True)
+    x_lim = (-2.6, 1.845)
+    y_lim = (-1.25, 1.25)
+    xpixels = 1080
+    ypixels = round(xpixels / (x_lim[1]-x_lim[0]) *
+                             (y_lim[1]-y_lim[0]))
+    brightness, smooth_iter, milnor_distance, color = mandelbrot(xpixels, ypixels, 500, x_lim, y_lim)
     # print(color)
 
     plt.imshow(color)
