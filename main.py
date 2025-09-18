@@ -27,8 +27,8 @@ def compute_lighting(
     light_vector: Array,
     has_escaped: Array,
     opacity: float = .75,
-    k_specular: int = 20,
-    k_shininess: float = .5,
+    k_specular: float = .5,
+    k_shininess: float = 20,
     k_diffuse: float = .5,
     k_ambient: float = .2,
 ) -> Array:
@@ -54,23 +54,24 @@ def compute_lighting(
     normal_vector *= has_escaped[..., None] # Mask pixels inside the mandelbrot set
 
     diffuse_light = jnp.dot(normal_vector, light_vector)
-    brightness = diffuse_light
 
-    reflection_vector = 2 * jnp.dot(normal_vector, light_vector)[..., None] * normal_vector - light_vector[None, None, :]
+    # reflection_vector = 2 * jnp.dot(normal_vector, light_vector)[..., None] * normal_vector - light_vector[None, None, :]
+    halfway_vector = (light_vector + jnp.array([0.0, 0.0, 1.0]))
     viewer_vector = jnp.array([0.0, 0.0, 1.0])
-    specular_light = jnp.dot(reflection_vector, viewer_vector)
-    # brightness = specular_light
+    specular_light = jnp.dot(reflection_vector, viewer_vector)**k_shininess
 
-    # brightness = (
-    #     k_ambient
-    #     + k_diffuse * diffuse_light
-    #     + k_shininess * specular_light
-    # ) * opacity + (1 - opacity) / 2
+    brightness = (
+        k_ambient
+        + k_diffuse * diffuse_light
+        + k_specular * specular_light
+    ) * opacity + (1 - opacity) / 2
+
+    print(jnp.min(brightness), jnp.max(brightness))
 
     return brightness
 
 
-def create_light_source(azimuth: float = 45, elevation: float = 45) -> Array:
+def create_light_source(azimuth: float = 90, elevation: float = 45) -> Array:
     """Creates a light source in 3D space.
 
     Args:
@@ -83,8 +84,8 @@ def create_light_source(azimuth: float = 45, elevation: float = 45) -> Array:
     azimuth = np.deg2rad(azimuth)
     elevation = np.deg2rad(elevation)
 
-    x = np.cos(elevation) * np.sin(azimuth)
-    y = np.cos(elevation) * np.cos(azimuth)
+    x = np.cos(elevation) * np.cos(azimuth)
+    y = np.cos(elevation) * np.sin(azimuth)
     z = np.sin(elevation)
 
     return jnp.array([x, y, z])
@@ -128,7 +129,7 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
 
     light_source = create_light_source(45, 45)
     normal = z / dz_dc
-    brightness = compute_lighting_jit(normal, light_source, has_escaped)
+    brightness = compute_lighting(normal, light_source, has_escaped)
 
     smooth_iter, milnor_distance = compute_smooth_iter_jit(z, dz_dc, has_escaped, escape_radius)
 
