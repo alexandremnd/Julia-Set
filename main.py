@@ -4,9 +4,10 @@ from jax import Array
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 def overlay(base, overlay):
-    return jnp.where(base < 0.5, 2 * base * overlay, 1 - 2 * (1 - base) * (1 - overlay))
+    return jnp.where(2 * overlay < 1, 2 * base * overlay, 1 - 2 * (1 - base) * (1 - overlay))
 
 def mandelbrot_step(z, dz_dc, c, count, escape_radius, has_escaped):
     dz_dc = jnp.where(has_escaped, dz_dc, 2.0 * dz_dc * z + 1)
@@ -49,16 +50,17 @@ def compute_lighting(
         Array: Computed lighting for the pixel
     """
     normal_vector /= jnp.abs(normal_vector)
-    normal_vector = jnp.stack([jnp.real(normal_vector), jnp.imag(normal_vector), jnp.ones_like(normal_vector, dtype=jnp.float32)], axis=-1)
+    normal_vector = jnp.stack([jnp.real(normal_vector), jnp.imag(normal_vector), jnp.ones_like(normal_vector, dtype=jnp.float64)], axis=-1)
     normal_vector /= jnp.linalg.norm(normal_vector, axis=2, keepdims=True)
-    normal_vector *= has_escaped[..., None] # Mask pixels inside the mandelbrot set
 
     diffuse_light = jnp.dot(normal_vector, light_vector)
 
+    # reflection_vector is for the Phong reflection model, but we use the Blinn-Phong model instead
     # reflection_vector = 2 * jnp.dot(normal_vector, light_vector)[..., None] * normal_vector - light_vector[None, None, :]
-    halfway_vector = (light_vector + jnp.array([0.0, 0.0, 1.0]))
     viewer_vector = jnp.array([0.0, 0.0, 1.0])
-    specular_light = jnp.dot(reflection_vector, viewer_vector)**k_shininess
+    halfway_vector = (light_vector + viewer_vector)
+    halfway_vector /= jnp.linalg.norm(halfway_vector)
+    specular_light = jnp.dot(normal_vector, halfway_vector)**k_shininess
 
     brightness = (
         k_ambient
@@ -66,7 +68,7 @@ def compute_lighting(
         + k_specular * specular_light
     ) * opacity + (1 - opacity) / 2
 
-    print(jnp.min(brightness), jnp.max(brightness))
+    brightness = jnp.where(has_escaped, brightness, 0.0)
 
     return brightness
 
@@ -139,21 +141,34 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
     stripe_a = stripe_a / (1 - stripe_memory**count *
                                        (1 + smooth_iter * (stripe_memory - 1)))
 
+    smooth_iter = count + smooth_iter
+    smooth_iter *= has_escaped
+
     color = apply_color(count + smooth_iter, stripe_a, milnor_distance, brightness)
+    color *= has_escaped[..., None]
 
-    return brightness, count + smooth_iter, milnor_distance, color
+    return brightness, smooth_iter, milnor_distance, color
 
-def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.11, .02, .92), ncycle=32):
+def build_colortable(n_colors=2**12, rgb_theta=(.0, .15, .25), ncycle=32):
+    """Build a discrete color table using the original color mapping."""
+    t = jnp.linspace(0, 1, n_colors)
+    color_table = (1 + jnp.sin(2 * jnp.pi * (t[:, None] + jnp.array(rgb_theta)[None, :]))) * 0.5
+    color_table = (color_table * 255).astype(jnp.uint8)
+    return color_table
+
+def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0, .15, .25), ncycle=32):
+    ncycle = np.sqrt(ncycle)
     smooth_iter = jnp.sqrt(smooth_iter) % ncycle / ncycle
+
     milnor_distance = -jnp.log(milnor_distance) / 12
     milnor_distance = 1/(1 + jnp.exp(-10 * (milnor_distance - 0.5)))
 
+    # only if stripes are used
     # brightness = overlay(brightness, stripe) * (1 - milnor_distance) + milnor_distance * brightness
 
     color = (1 + jnp.sin(2 * jnp.pi * (smooth_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
-    color = overlay(color, brightness[..., None])
-
-    return brightness
+    # color = overlay(color, brightness[..., None])
+    return color
 
 def main():
     jax.config.update("jax_enable_x64", True)
@@ -162,10 +177,10 @@ def main():
     xpixels = 1080
     ypixels = round(xpixels / (x_lim[1]-x_lim[0]) *
                              (y_lim[1]-y_lim[0]))
-    brightness, smooth_iter, milnor_distance, color = mandelbrot(xpixels, ypixels, 500, x_lim, y_lim)
-    # print(color)
+    brightness, smooth_iter, milnor_distance, color = mandelbrot(xpixels, ypixels, 1000, x_lim, y_lim)
 
-    plt.imshow(color)
+    plt.imshow(smooth_iter)
+    plt.colorbar()
     plt.show()
 
 
