@@ -247,13 +247,5 @@ apply_color_jit = jax.jit(apply_color)
 
 if __name__ == "__main__":
     jax.config.update("jax_enable_x64", True)
-
-    # Define the region of the complex plane to visualize
-    x_lim = (-2.6, 1.845)
-    y_lim = (-1.25, 1.25)
-    # x_lim = (-0.5503295086752807, -0.5503293049351449)
-    # y_lim = (-0.6259346555912755, -0.625934541001796)
-
-    xpixels = 1080
-
-    gui_mandelbrot(xpixels)
+    print(f"JAX accelerator in use: {jax.devices()[0].device_kind}")
+    gui_mandelbrot(1080)

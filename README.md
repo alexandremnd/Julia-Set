@@ -1,34 +1,41 @@
-# Julia Set & Mandelbrot Set Drawer
+# Mandelbrot Set Explorer
 
-This project uses Python and JAX (or numpy) to render high-definition Julia and Mandelbrot sets with optional shading and coloring.
+<!-- ![Mandelbrot Example](https://upload.wikimedia.org/wikipedia/commons/2/21/Mandel_zoom_00_mandelbrot_set.jpg) -->
 
-## Installation
+A high-performance, interactive Mandelbrot and Julia set explorer written in Python, leveraging JAX for GPU/TPU acceleration and Matplotlib for a modern, responsive GUI. Features advanced coloring, lighting, and real-time parameter adjustment.
 
-### 1. Initialize the Environment
-Using `uv`, in the project directory, init a virtual environment with:
-```sh
-uv venv
-```
-or with any virtual environment manager.
 
-### 2. Install Dependencies
-To install all required packages, run:
+## Features
+- **Ultra-fast rendering** with JAX (CPU/GPU/TPU support)
+- **Interactive GUI**: zoom, adjust color and fractal parameters live
+- **Advanced coloring**: smooth iteration, stripe average and  Blinn-Phong lighting
+- **Custom color palettes**: continuous color table modes
+- **High-definition output**: anti-aliasing via oversampling
+
+<div style="text-align:center">
+    <img src="img/gui.png" width="500"/>
+</div>
+
+## Quickstart
+
+1. Install dependencies
 ```sh
 uv pip install .
 ```
-Or, if you don't use `uv`:
+
+2. Run the interactive explorer
 ```sh
-pip install -r requirements.txt
+uv run main.py
 ```
 
-### 4. Activate the Environment
-To activate the environment (assuming it is in `./.venv/`):
-```sh
-source .venv/bin/activate
-```
+3. Controls
+- **Sliders**: Adjust color phase, oversampling, max iterations, color cycles, zoom, and center
+- **Live update**: All changes are reflected instantly (or not if you are on CPU)
 
-### 5. Run the Project
-You can run the main script with:
-```sh
-python main.py
-```
+
+## Credits
+- Original repo from [jlesuffleur](https://github.com/jlesuffleur/gpu_mandelbrot): used milnor distance/stripe averaging and color palette from his repo. This project was mainly an opportunity to experiment with JAX library.
+
+
+## License
+This project is licensed under the MIT license - see [LICENSE](LICENSE) file for details.
