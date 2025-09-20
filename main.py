@@ -4,7 +4,7 @@ from jax import Array
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
+from matplotlib.widgets import Button, Slider
 
 def overlay(base, overlay):
     return jnp.where(2 * overlay < 1, 2 * base * overlay, 1 - 2 * (1 - base) * (1 - overlay))
@@ -103,9 +103,9 @@ def compute_smooth_iter(z, dz_dc, has_escaped, escape_radius=2.0):
 
     return smooth_iter, milnor_distance
 
-def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
+def mandelbrot(width, height, max_iter, xlim, ylim, D=3):
     escape_radius = 10**5
-    stripe_density = 5
+    stripe_density = 2
     stripe_memory = 0.9
 
     xs = jnp.linspace(xlim[0], xlim[1], width * D, dtype=jnp.float64)
@@ -120,18 +120,13 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
 
     count = jnp.zeros(c.shape, dtype=jnp.int32)
 
-    mandelbrot_step_jit = jax.jit(mandelbrot_step)
-    stripe_average_jit = jax.jit(stripe_average)
-    compute_lighting_jit = jax.jit(compute_lighting)
-    compute_smooth_iter_jit = jax.jit(compute_smooth_iter)
-
     for i in range(max_iter):
         z, dz_dc, count, has_escaped = mandelbrot_step_jit(z, dz_dc, c, count, escape_radius, has_escaped)
         stripe_a = stripe_average_jit(z, stripe_a, has_escaped, stripe_density, stripe_memory)
 
     light_source = create_light_source(45, 45)
     normal = z / dz_dc
-    brightness = compute_lighting(normal, light_source, has_escaped)
+    brightness = compute_lighting_jit(normal, light_source, has_escaped)
 
     smooth_iter, milnor_distance = compute_smooth_iter_jit(z, dz_dc, has_escaped, escape_radius)
 
@@ -144,46 +139,121 @@ def mandelbrot(width, height, max_iter, xlim, ylim, D=1):
     smooth_iter = count + smooth_iter
     smooth_iter *= has_escaped
 
-    color = apply_color(count + smooth_iter, stripe_a, milnor_distance, brightness)
-    color *= has_escaped[..., None]
-
-    return brightness, smooth_iter, milnor_distance, color
-
-def build_colortable(n_colors=2**12, rgb_theta=(.0, .15, .25), ncycle=32):
-    """Build a discrete color table using the original color mapping."""
-    t = jnp.linspace(0, 1, n_colors)
-    color_table = (1 + jnp.sin(2 * jnp.pi * (t[:, None] + jnp.array(rgb_theta)[None, :]))) * 0.5
-    color_table = (color_table * 255).astype(jnp.uint8)
-    return color_table
-
-def apply_color(smooth_iter, stripe, milnor_distance, brightness, rgb_theta=(.0, .15, .25), ncycle=32):
-    ncycle = np.sqrt(ncycle)
-    smooth_iter = jnp.sqrt(smooth_iter) % ncycle / ncycle
-
+    # Milnor distance normalization and contrast enhancement
     milnor_distance = -jnp.log(milnor_distance) / 12
     milnor_distance = 1/(1 + jnp.exp(-10 * (milnor_distance - 0.5)))
 
-    # only if stripes are used
+    brightness = brightness.reshape((height, D, width, D)).mean(axis=(1, 3))
+    smooth_iter = smooth_iter.reshape((height, D, width, D)).mean(axis=(1, 3))
+    milnor_distance = milnor_distance.reshape((height, D, width, D)).mean(axis=(1, 3))
+    stripe_a = stripe_a.reshape((height, D, width, D)).mean(axis=(1, 3))
+
+    return brightness, smooth_iter, milnor_distance, stripe_a
+
+def apply_color(smooth_iter, stripe, milnor_distance, brightness, ncycle, rgb_theta=(.0, .15, .25)):
     # brightness = overlay(brightness, stripe) * (1 - milnor_distance) + milnor_distance * brightness
 
-    color = (1 + jnp.sin(2 * jnp.pi * (smooth_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
-    # color = overlay(color, brightness[..., None])
+    transformed_iter = (jnp.sqrt(smooth_iter) % ncycle) / ncycle
+
+    color = (1 + jnp.sin(2 * jnp.pi * (transformed_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
+    color = overlay(color, brightness[..., None])
     return color
 
-def main():
-    jax.config.update("jax_enable_x64", True)
+def gui_mandelbrot(xpixels):
+    fig, ax = plt.subplots()
+
+    ncycle = 32
+    rgb_theta = (0.0, 0.15, 0.25)
     x_lim = (-2.6, 1.845)
     y_lim = (-1.25, 1.25)
-    xpixels = 1080
-    ypixels = round(xpixels / (x_lim[1]-x_lim[0]) *
-                             (y_lim[1]-y_lim[0]))
-    brightness, smooth_iter, milnor_distance, color = mandelbrot(xpixels, ypixels, 1000, x_lim, y_lim)
+    x_range = x_lim[1] - x_lim[0]
+    y_range = y_lim[1] - y_lim[0]
 
-    plt.imshow(smooth_iter)
-    plt.colorbar()
+    ypixels = round(xpixels / x_range * y_range)
+
+    brightness, smooth_iter, milnor_distance, stripe = mandelbrot(xpixels, ypixels, 500, x_lim, y_lim, D=1)
+    color = apply_color(smooth_iter, stripe, milnor_distance, brightness, np.sqrt(ncycle))
+    img = ax.imshow(color)
+
+    ax_r = plt.axes((0.05, 0.05, 0.15, 0.02))
+    ax_g = plt.axes((0.05, 0.1, 0.15, 0.02))
+    ax_b = plt.axes((0.05, 0.15, 0.15, 0.02))
+
+    ax_oversample = plt.axes((0.4, 0.05, 0.2, 0.02))
+    ax_maxiter = plt.axes((0.4, 0.1, 0.2, 0.02))
+    ax_ncycle = plt.axes((0.4, 0.15, 0.2, 0.02))
+
+    ax_x_center = plt.axes((0.75, 0.05, 0.2, 0.02))
+    ax_y_center = plt.axes((0.75, 0.1, 0.2, 0.02))
+    ax_zoom = plt.axes((0.75, 0.15, 0.2, 0.02))
+
+    s_r = Slider(ax_r, '$\\theta_r$  ', 0, 1, valinit=rgb_theta[0], valstep=0.01, handle_style={'size': 7})
+    s_g = Slider(ax_g, '$\\theta_g$  ', 0, 1, valinit=rgb_theta[1], valstep=0.01, handle_style={'size': 7})
+    s_b = Slider(ax_b, '$\\theta_b$  ', 0, 1, valinit=rgb_theta[2], valstep=0.01, handle_style={'size': 7})
+
+    s_oversample = Slider(ax_oversample, 'Sampling  ', 1, 4, valinit=1, valstep=1, handle_style={'size': 7})
+    s_maxiter = Slider(ax_maxiter, 'Max Iter  ', 50, 2000, valinit=500, valstep=50, handle_style={'size': 7})
+    s_ncycle = Slider(ax_ncycle, 'N-Cycle  ', 2, 64, valinit=ncycle, valstep=1, handle_style={'size': 7})
+
+    s_x_center = Slider(ax_x_center, 'X  ', -3, 3, valinit=-0.5, valstep=0.001, handle_style={'size': 7})
+    s_y_center = Slider(ax_y_center, 'Y  ', -2, 2, valinit=0, valstep=0.001, handle_style={'size': 7})
+    s_zoom = Slider(ax_zoom, 'Zoom  ', 1, 50, valinit=1, valstep=0.1, handle_style={'size': 7})
+
+    def update_mandelbrot(val, x_range, y_range):
+        nonlocal brightness, smooth_iter, milnor_distance, stripe
+        max_iter = int(s_maxiter.val)
+        oversampling = int(s_oversample.val)
+        x_center = s_x_center.val
+        y_center = -s_y_center.val # Invert y-axis for intuitive zooming
+        zoom = s_zoom.val
+
+        new_x_range = x_range / zoom
+        new_y_range = y_range / zoom
+        new_x_lim = (x_center - new_x_range/2, x_center + new_x_range/2)
+        new_y_lim = (y_center - new_y_range/2, y_center + new_y_range/2)
+
+        brightness, smooth_iter, milnor_distance, stripe = mandelbrot(xpixels, ypixels, max_iter, new_x_lim, new_y_lim, D=oversampling)
+        update_color(val)
+
+    def update_color(val):
+        rgb_theta = (s_r.val, s_g.val, s_b.val)
+        ncycle = s_ncycle.val
+        color = apply_color_jit(smooth_iter, stripe, milnor_distance, brightness, np.sqrt(ncycle), rgb_theta)
+        img.set_data(color)
+        fig.canvas.draw_idle()
+
+    s_oversample.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
+    s_maxiter.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
+    s_x_center.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
+    s_y_center.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
+    s_zoom.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
+
+    s_r.on_changed(update_color)
+    s_g.on_changed(update_color)
+    s_b.on_changed(update_color)
+    s_ncycle.on_changed(update_color)
+
+    ax.set_position((0, 0.3, 1, 0.7))
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.axis('off')
     plt.show()
 
+mandelbrot_step_jit = jax.jit(mandelbrot_step)
+stripe_average_jit = jax.jit(stripe_average)
+compute_lighting_jit = jax.jit(compute_lighting)
+compute_smooth_iter_jit = jax.jit(compute_smooth_iter)
+apply_color_jit = jax.jit(apply_color)
 
 if __name__ == "__main__":
-    main()
-    # time_mandelbrot(1920, 1080, 500, (-2.6, 2.6), (-1.5, 1.5))
+    jax.config.update("jax_enable_x64", True)
+
+    # Define the region of the complex plane to visualize
+    x_lim = (-2.6, 1.845)
+    y_lim = (-1.25, 1.25)
+    # x_lim = (-0.5503295086752807, -0.5503293049351449)
+    # y_lim = (-0.6259346555912755, -0.625934541001796)
+
+    xpixels = 1080
+
+    gui_mandelbrot(xpixels)
