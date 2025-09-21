@@ -17,8 +17,6 @@ A high-performance, interactive Mandelbrot and Julia set explorer written in Pyt
   <img src="img/usage.gif" width="500"/>
 </p>
 
-
-
 ## Quickstart
 
 1. Install dependencies
