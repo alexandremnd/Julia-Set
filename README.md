@@ -6,15 +6,18 @@ A high-performance, interactive Mandelbrot and Julia set explorer written in Pyt
 
 
 ## Features
-- **Ultra-fast rendering** with JAX (CPU/GPU/TPU support)
+- **Ultra-fast rendering** with JAX (CPU/GPU/TPU support - no Apple GPU support sadly ...)
 - **Interactive GUI**: zoom, adjust color and fractal parameters live
 - **Advanced coloring**: smooth iteration, stripe average and  Blinn-Phong lighting
 - **Custom color palettes**: continuous color table modes
 - **High-definition output**: anti-aliasing via oversampling
 
-<div style="text-align:center">
-    <img src="img/gui.png" width="500"/>
-</div>
+<!-- Centered GIF for GitHub markdown (HTML style is ignored by GitHub, so use table hack) -->
+<p align="center">
+  <img src="img/usage.gif" width="500"/>
+</p>
+
+
 
 ## Quickstart
 

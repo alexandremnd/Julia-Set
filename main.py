@@ -1,251 +1,194 @@
-import jax.numpy as jnp
 import jax
-from jax import Array
+from matplotlib.image import AxesImage
 import numpy as np
-from PIL import Image
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Button, Slider
+from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import RectangleSelector
+from matplotlib.backend_bases import MouseButton
 
-def overlay(base, overlay):
-    return jnp.where(2 * overlay < 1, 2 * base * overlay, 1 - 2 * (1 - base) * (1 - overlay))
+from computation import mandelbrot, apply_color, apply_color_jit
 
-def mandelbrot_step(z, dz_dc, c, count, escape_radius, has_escaped):
-    dz_dc = jnp.where(has_escaped, dz_dc, 2.0 * dz_dc * z + 1)
-    z = jnp.where(has_escaped, z, z * z + c)
+class MandelbrotGUI:
+    def __init__(self):
+        self.fig, self.ax = plt.subplots()
+        # self.fig_slide, self.ax_slide = plt.subplots()
+        self.ax.set_position((0, 0.25, 1, 0.75))
+        self.ax.set_xticks([])
+        self.ax.set_yticks([])
+        self.ax.axis('off')
 
-    has_escaped = jnp.abs(z) > escape_radius
-    count += ~has_escaped
+        # self.ax_slide.set_xticks([])
+        # self.ax_slide.set_yticks([])
+        # self.ax_slide.axis('off')
 
-    return z, dz_dc, count, has_escaped
+        self.x_lim = (-2.6, 1.845)
+        self.y_lim = (-1.25, 1.25)
 
-def stripe_average(z, stripe_a, has_escaped, stripe_density=2, stripe_memory=0.9):
-    stripe_i = (1 + jnp.sin(stripe_density * jnp.angle(z))) / 2
+        self.x_range = self.x_lim[1] - self.x_lim[0]
+        self.y_range = self.y_lim[1] - self.y_lim[0]
 
-    return jnp.where(has_escaped, stripe_a, stripe_memory * stripe_a + (1 - stripe_memory) * stripe_i)
+        self.xpixels = 1080
+        self.ypixels = round(self.xpixels / self.x_range * self.y_range)
 
-def compute_lighting(
-    normal_vector: Array,
-    light_vector: Array,
-    has_escaped: Array,
-    opacity: float = .75,
-    k_specular: float = .5,
-    k_shininess: float = 20,
-    k_diffuse: float = .5,
-    k_ambient: float = .2,
-) -> Array:
-    """Computes the lighting for a pixel using Phong reflection model.
-    See https://en.wikipedia.org/wiki/Phong_reflection_model#Applications for more details.
+        self.default_xpixels = self.xpixels
+        self.default_ypixels = self.ypixels
+        self.default_x_lim = self.x_lim
+        self.default_y_lim = self.y_lim
 
-    Args:
-        normal_vector (Array): Normal vector for all pixels (complex type)
-        light_vector (Array): Light source (normalized) vector (3D)
-        has_escaped (Array): If the pixel has escaped the mandelbrot set
-        opacity (float, optional): Percent of received light. Defaults to .75.
-        k_specular (int, optional): Specular coefficient. Defaults to 20.
-        k_shininess (float, optional): Shininess coefficient. Defaults to .5.
-        k_diffuse (float, optional): Diffuse coefficient. Defaults to .5.
-        k_ambient (float, optional): Ambient coefficient. Defaults to .2.
+        self.max_iter = 500
+        self.oversampling = 1
+        self.ncycle = 32
+        self.rgb_theta = (0.0, 0.15, 0.25)
+        self.stripe_enabled = False
 
-    Returns:
-        Array: Computed lighting for the pixel
-    """
-    normal_vector /= jnp.abs(normal_vector)
-    normal_vector = jnp.stack([jnp.real(normal_vector), jnp.imag(normal_vector), jnp.ones_like(normal_vector, dtype=jnp.float64)], axis=-1)
-    normal_vector /= jnp.linalg.norm(normal_vector, axis=2, keepdims=True)
+        self.brightness, self.smooth_iter, self.milnor_distance, self.stripe = mandelbrot(
+            self.xpixels, self.ypixels, self.max_iter, self.x_lim, self.y_lim, D=self.oversampling
+        )
 
-    diffuse_light = jnp.dot(normal_vector, light_vector)
+        self.color = apply_color_jit(
+            self.smooth_iter, self.stripe, self.stripe_enabled, self.milnor_distance, self.brightness, np.sqrt(self.ncycle), self.rgb_theta
+        )
 
-    # reflection_vector is for the Phong reflection model, but we use the Blinn-Phong model instead
-    # reflection_vector = 2 * jnp.dot(normal_vector, light_vector)[..., None] * normal_vector - light_vector[None, None, :]
-    viewer_vector = jnp.array([0.0, 0.0, 1.0])
-    halfway_vector = (light_vector + viewer_vector)
-    halfway_vector /= jnp.linalg.norm(halfway_vector)
-    specular_light = jnp.dot(normal_vector, halfway_vector)**k_shininess
+        self.img: AxesImage = self.ax.imshow(self.color)
 
-    brightness = (
-        k_ambient
-        + k_diffuse * diffuse_light
-        + k_specular * specular_light
-    ) * opacity + (1 - opacity) / 2
-
-    brightness = jnp.where(has_escaped, brightness, 0.0)
-
-    return brightness
+        # Add sliders and controllers
+        self.add_slider()
+        self.add_button()
+        self.selector = RectangleSelector(self.ax, self.on_rectangle_select, useblit=True, button=[MouseButton.LEFT],
+                                   minspanx=5, minspany=5, spancoords='pixels')
+        plt.show()
 
 
-def create_light_source(azimuth: float = 90, elevation: float = 45) -> Array:
-    """Creates a light source in 3D space.
+    def add_slider(self):
+        ax_r = plt.axes((0.15, 0.1, 0.15, 0.02))
+        ax_g = plt.axes((0.15, 0.15, 0.15, 0.02))
+        ax_b = plt.axes((0.15, 0.2, 0.15, 0.02))
+        ax_ncycle = plt.axes((0.15, 0.05, 0.15, 0.02))
 
-    Args:
-        azimuth (float): Azimuth of the light (0° = From bottom, 90° = From right)
-        elevation (float): Elevation of the light (0° = Inside mandelbrot plane, 90° = From above)
+        ax_oversample = plt.axes((0.5, 0.2, 0.2, 0.02))
+        ax_maxiter = plt.axes((0.5, 0.15, 0.2, 0.02))
+        ax_status = plt.axes((0.5, 0.05, 0.1, 0.02))
 
-    Returns:
-        Array: Light source (normalized) vector
-    """
-    azimuth = np.deg2rad(azimuth)
-    elevation = np.deg2rad(elevation)
+        self.status_text = ax_status.text(0.5, 0.5, 'Done.', ha='center', va='center', transform=ax_status.transAxes)
+        ax_status.set_xticks([])
+        ax_status.set_yticks([])
+        ax_status.axis('off')
 
-    x = np.cos(elevation) * np.cos(azimuth)
-    y = np.cos(elevation) * np.sin(azimuth)
-    z = np.sin(elevation)
+        self.s_r = Slider(ax_r, '$\\theta_r$  ', 0, 1, valinit=self.rgb_theta[0], valstep=0.01, handle_style={'size': 7})
+        self.s_g = Slider(ax_g, '$\\theta_g$  ', 0, 1, valinit=self.rgb_theta[1], valstep=0.01, handle_style={'size': 7})
+        self.s_b = Slider(ax_b, '$\\theta_b$  ', 0, 1, valinit=self.rgb_theta[2], valstep=0.01, handle_style={'size': 7})
+        self.s_ncycle = Slider(ax_ncycle, 'N-Cycle  ', 2, 64, valinit=self.ncycle, valstep=1, handle_style={'size': 7})
 
-    return jnp.array([x, y, z])
+        self.s_oversample = Slider(ax_oversample, 'Sampling  ', 1, 4, valinit=self.oversampling, valstep=1, handle_style={'size': 7})
+        self.s_maxiter = Slider(ax_maxiter, 'Max Iter  ', 50, 2000, valinit=self.max_iter, valstep=50, handle_style={'size': 7})
 
-def compute_smooth_iter(z, dz_dc, has_escaped, escape_radius=2.0):
-    abs_z = jnp.abs(z)
-    log_ratio = jnp.log(abs_z) / jnp.log(escape_radius)
-    smooth_iter = 1 - jnp.log(log_ratio) / jnp.log(2)
-    smooth_iter = jnp.where(has_escaped, smooth_iter, 0.0)
+        self.s_r.on_changed(self.update_color)
+        self.s_g.on_changed(self.update_color)
+        self.s_b.on_changed(self.update_color)
+        self.s_ncycle.on_changed(self.update_color)
 
-    milnor_distance = abs_z * jnp.log(abs_z) / jnp.abs(dz_dc) / 2
-    milnor_distance = jnp.where(has_escaped, milnor_distance, 0)
+        self.s_oversample.on_changed(self.update_parameters)
+        self.s_maxiter.on_changed(self.update_parameters)
 
-    return smooth_iter, milnor_distance
+    def add_button(self):
+        def reset_view(val):
+            self.xpixels = self.default_xpixels
+            self.ypixels = self.default_ypixels
+            self.x_lim = self.default_x_lim
+            self.y_lim = self.default_y_lim
+            self.x_range = self.x_lim[1] - self.x_lim[0]
+            self.y_range = self.y_lim[1] - self.y_lim[0]
+            self.compute_mandelbrot()
 
-def mandelbrot(width, height, max_iter, xlim, ylim, D=3):
-    escape_radius = 10**5
-    stripe_density = 2
-    stripe_memory = 0.9
+        def enable_selection(event):
+            self.selector.active = not self.selector.active
+            self.fig.canvas.draw_idle()
 
-    xs = jnp.linspace(xlim[0], xlim[1], width * D, dtype=jnp.float64)
-    ys = jnp.linspace(ylim[0], ylim[1], height * D, dtype=jnp.float64)
-    X, Y = jnp.meshgrid(xs, ys)
+        def swap_color(button: Button, state):
+            if state:
+                button.color = "#0aa815"
+                button.hovercolor = "#07780f"
+            else:
+                button.color = "#d80d0d"
+                button.hovercolor = "#a80a0a"
+            return
 
-    c = X + 1j * Y
-    z = jnp.zeros_like(c, dtype=jnp.complex128)
-    dz_dc = jnp.ones_like(c, dtype=jnp.complex128)
-    has_escaped = jnp.zeros(c.shape, dtype=bool)
-    stripe_a = jnp.zeros(c.shape, dtype=jnp.float64)
+        def toggle_stripe(event):
+            self.stripe_enabled = not self.stripe_enabled
+            self.update_color(None)
 
-    count = jnp.zeros(c.shape, dtype=jnp.int32)
+        ax_reset = plt.axes((0.8, 0.02, 0.1, 0.04))
+        self.reset_button = Button(ax_reset, 'Reset')
+        self.reset_button.on_clicked(reset_view)
 
-    for i in range(max_iter):
-        z, dz_dc, count, has_escaped = mandelbrot_step_jit(z, dz_dc, c, count, escape_radius, has_escaped)
-        stripe_a = stripe_average_jit(z, stripe_a, has_escaped, stripe_density, stripe_memory)
+        ax_enable_selection = plt.axes((0.8, 0.09, 0.1, 0.04))
+        self.enable_selection_button = Button(ax_enable_selection, 'Select', color="#0aa815", hovercolor="#07780f")
+        self.enable_selection_button.on_clicked(enable_selection)
+        self.enable_selection_button.on_clicked(lambda event: swap_color(self.enable_selection_button, self.selector.active))
 
-    light_source = create_light_source(45, 45)
-    normal = z / dz_dc
-    brightness = compute_lighting_jit(normal, light_source, has_escaped)
+        ax_stripe = plt.axes((0.8, 0.15, 0.1, 0.04))
+        self.stripe_button = Button(ax_stripe, 'Stripe', color="#d80d0d", hovercolor="#a80a0a")
+        self.stripe_button.on_clicked(toggle_stripe)
+        self.stripe_button.on_clicked(lambda event: swap_color(self.stripe_button, self.stripe_enabled))
 
-    smooth_iter, milnor_distance = compute_smooth_iter_jit(z, dz_dc, has_escaped, escape_radius)
+    def update_color(self, val):
+        self.rgb_theta = (self.s_r.val, self.s_g.val, self.s_b.val)
+        self.ncycle = self.s_ncycle.val
 
-    stripe_t = (1 + jnp.sin(stripe_density * jnp.angle(z))) / 2
-    stripe_a = (stripe_a * (1 + smooth_iter * (stripe_memory - 1)) +
-                            stripe_t * smooth_iter * (1 - stripe_memory))
-    stripe_a = stripe_a / (1 - stripe_memory**count *
-                                       (1 + smooth_iter * (stripe_memory - 1)))
+        color = apply_color_jit(self.smooth_iter, self.stripe, self.stripe_enabled, self.milnor_distance, self.brightness, np.sqrt(self.ncycle), self.rgb_theta)
 
-    smooth_iter = count + smooth_iter
-    smooth_iter *= has_escaped
+        self.img.set_data(color)
+        self.fig.canvas.draw_idle()
 
-    # Milnor distance normalization and contrast enhancement
-    milnor_distance = -jnp.log(milnor_distance) / 12
-    milnor_distance = 1/(1 + jnp.exp(-10 * (milnor_distance - 0.5)))
+    def update_parameters(self, val):
+        self.oversampling = int(self.s_oversample.val)
+        self.max_iter = int(self.s_maxiter.val)
+        self.compute_mandelbrot()
 
-    brightness = brightness.reshape((height, D, width, D)).mean(axis=(1, 3))
-    smooth_iter = smooth_iter.reshape((height, D, width, D)).mean(axis=(1, 3))
-    milnor_distance = milnor_distance.reshape((height, D, width, D)).mean(axis=(1, 3))
-    stripe_a = stripe_a.reshape((height, D, width, D)).mean(axis=(1, 3))
+    def on_rectangle_select(self, eclick, erelease):
+        x1, y1 = eclick.xdata, eclick.ydata
+        x2, y2 = erelease.xdata, erelease.ydata
 
-    return brightness, smooth_iter, milnor_distance, stripe_a
+        if x1 is None or y1 is None or x2 is None or y2 is None:
+            return
+        if x1 == x2 or y1 == y2:
+            return
 
-def apply_color(smooth_iter, stripe, milnor_distance, brightness, ncycle, rgb_theta=(.0, .15, .25)):
-    # brightness = overlay(brightness, stripe) * (1 - milnor_distance) + milnor_distance * brightness
+        old_ratio = self.x_range / self.y_range
 
-    transformed_iter = (jnp.sqrt(smooth_iter) % ncycle) / ncycle
+        self.x_lim = (x1 / self.xpixels * self.x_range + self.x_lim[0], x2 / self.xpixels * self.x_range + self.x_lim[0])
+        self.y_lim = (y1 / self.ypixels * self.y_range + self.y_lim[0], y2 / self.ypixels * self.y_range + self.y_lim[0])
+        self.x_lim = (min(self.x_lim), max(self.x_lim))
+        self.y_lim = (min(self.y_lim), max(self.y_lim))
 
-    color = (1 + jnp.sin(2 * jnp.pi * (transformed_iter[..., None] + jnp.array(rgb_theta)[None, None, :]))) * 0.5
-    color = overlay(color, brightness[..., None])
-    return color
+        self.x_range = self.x_lim[1] - self.x_lim[0]
+        self.y_range = self.y_lim[1] - self.y_lim[0]
 
-def gui_mandelbrot(xpixels):
-    fig, ax = plt.subplots()
+        new_ratio = self.x_range / self.y_range
 
-    ncycle = 32
-    rgb_theta = (0.0, 0.15, 0.25)
-    x_lim = (-2.6, 1.845)
-    y_lim = (-1.25, 1.25)
-    x_range = x_lim[1] - x_lim[0]
-    y_range = y_lim[1] - y_lim[0]
+        self.xpixels = int(self.xpixels * new_ratio / old_ratio)
+        self.ypixels = int(self.ypixels * old_ratio / new_ratio)
 
-    ypixels = round(xpixels / x_range * y_range)
+        self.compute_mandelbrot()
 
-    brightness, smooth_iter, milnor_distance, stripe = mandelbrot(xpixels, ypixels, 500, x_lim, y_lim, D=1)
-    color = apply_color(smooth_iter, stripe, milnor_distance, brightness, np.sqrt(ncycle))
-    img = ax.imshow(color)
+    def compute_mandelbrot(self):
+        self.set_status('Computing...', 'red')
 
-    ax_r = plt.axes((0.05, 0.05, 0.15, 0.02))
-    ax_g = plt.axes((0.05, 0.1, 0.15, 0.02))
-    ax_b = plt.axes((0.05, 0.15, 0.15, 0.02))
+        self.brightness, self.smooth_iter, self.milnor_distance, self.stripe = mandelbrot(
+            self.xpixels, self.ypixels, int(self.s_maxiter.val), self.x_lim, self.y_lim, D=int(self.s_oversample.val)
+        )
 
-    ax_oversample = plt.axes((0.4, 0.05, 0.2, 0.02))
-    ax_maxiter = plt.axes((0.4, 0.1, 0.2, 0.02))
-    ax_ncycle = plt.axes((0.4, 0.15, 0.2, 0.02))
+        self.set_status('Done.', 'green')
 
-    ax_x_center = plt.axes((0.75, 0.05, 0.2, 0.02))
-    ax_y_center = plt.axes((0.75, 0.1, 0.2, 0.02))
-    ax_zoom = plt.axes((0.75, 0.15, 0.2, 0.02))
+        self.update_color(None)
 
-    s_r = Slider(ax_r, '$\\theta_r$  ', 0, 1, valinit=rgb_theta[0], valstep=0.01, handle_style={'size': 7})
-    s_g = Slider(ax_g, '$\\theta_g$  ', 0, 1, valinit=rgb_theta[1], valstep=0.01, handle_style={'size': 7})
-    s_b = Slider(ax_b, '$\\theta_b$  ', 0, 1, valinit=rgb_theta[2], valstep=0.01, handle_style={'size': 7})
-
-    s_oversample = Slider(ax_oversample, 'Sampling  ', 1, 4, valinit=1, valstep=1, handle_style={'size': 7})
-    s_maxiter = Slider(ax_maxiter, 'Max Iter  ', 50, 2000, valinit=500, valstep=50, handle_style={'size': 7})
-    s_ncycle = Slider(ax_ncycle, 'N-Cycle  ', 2, 64, valinit=ncycle, valstep=1, handle_style={'size': 7})
-
-    s_x_center = Slider(ax_x_center, 'X  ', -3, 3, valinit=-0.5, valstep=0.001, handle_style={'size': 7})
-    s_y_center = Slider(ax_y_center, 'Y  ', -2, 2, valinit=0, valstep=0.001, handle_style={'size': 7})
-    s_zoom = Slider(ax_zoom, 'Zoom  ', 1, 50, valinit=1, valstep=0.1, handle_style={'size': 7})
-
-    def update_mandelbrot(val, x_range, y_range):
-        nonlocal brightness, smooth_iter, milnor_distance, stripe
-        max_iter = int(s_maxiter.val)
-        oversampling = int(s_oversample.val)
-        x_center = s_x_center.val
-        y_center = -s_y_center.val # Invert y-axis for intuitive zooming
-        zoom = s_zoom.val
-
-        new_x_range = x_range / zoom
-        new_y_range = y_range / zoom
-        new_x_lim = (x_center - new_x_range/2, x_center + new_x_range/2)
-        new_y_lim = (y_center - new_y_range/2, y_center + new_y_range/2)
-
-        brightness, smooth_iter, milnor_distance, stripe = mandelbrot(xpixels, ypixels, max_iter, new_x_lim, new_y_lim, D=oversampling)
-        update_color(val)
-
-    def update_color(val):
-        rgb_theta = (s_r.val, s_g.val, s_b.val)
-        ncycle = s_ncycle.val
-        color = apply_color_jit(smooth_iter, stripe, milnor_distance, brightness, np.sqrt(ncycle), rgb_theta)
-        img.set_data(color)
-        fig.canvas.draw_idle()
-
-    s_oversample.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
-    s_maxiter.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
-    s_x_center.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
-    s_y_center.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
-    s_zoom.on_changed(lambda val: update_mandelbrot(val, x_range, y_range))
-
-    s_r.on_changed(update_color)
-    s_g.on_changed(update_color)
-    s_b.on_changed(update_color)
-    s_ncycle.on_changed(update_color)
-
-    ax.set_position((0, 0.3, 1, 0.7))
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.axis('off')
-    plt.show()
-
-mandelbrot_step_jit = jax.jit(mandelbrot_step)
-stripe_average_jit = jax.jit(stripe_average)
-compute_lighting_jit = jax.jit(compute_lighting)
-compute_smooth_iter_jit = jax.jit(compute_smooth_iter)
-apply_color_jit = jax.jit(apply_color)
+    def set_status(self, text: str, color):
+        self.status_text.set_text(text)
+        self.status_text.set_color(color)
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
 
 if __name__ == "__main__":
     jax.config.update("jax_enable_x64", True)
     print(f"JAX accelerator in use: {jax.devices()[0].device_kind}")
-    gui_mandelbrot(1080)
+    MandelbrotGUI()
