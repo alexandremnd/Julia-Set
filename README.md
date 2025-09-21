@@ -33,7 +33,6 @@ uv run main.py
 - **Sliders**: Adjust color phase, oversampling, max iterations, color cycles, zoom, and center
 - **Live update**: All changes are reflected instantly (or not if you are on CPU)
 
-
 ## Credits
 - Original repo from [jlesuffleur](https://github.com/jlesuffleur/gpu_mandelbrot): used milnor distance/stripe averaging and color palette from his repo. This project was mainly an opportunity to experiment with JAX library.
 
